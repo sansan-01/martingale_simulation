@@ -1,6 +1,6 @@
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <time.h>
 #include <omp.h>    // 引入 OpenMP 的头文件
 
@@ -25,21 +25,24 @@
 // --- 函数声明 ---
 int my_rand_thread_safe(unsigned int *seed);
 int simulate_game_round_thread_safe(double initial_capital, double target_capital, double base_bet, int betting_mode, unsigned int *seed_ptr);
-void simulate_detailed_run(double initial_capital, double target_capital, double base_bet, int betting_mode);
+void simulate_detailed_run(double initial_capital, double target_capital, double base_bet, int betting_mode, unsigned int seed);
 void print_progress(double percentage);
+static int read_menu_choice(void);
+static int flush_output(void);
 
 // --- 主函数 ---
-int main() {
-    int run_mode = 0;
-    int betting_mode = 0;
-
+int main(void) {
     // --- 用户交互菜单 (英文界面) ---
     // 菜单部分，用于让用户选择运行模式
     printf("Please select a Run Mode:\n");
     printf("  1: Benchmark Mode (High-performance parallel simulation)\n");
     printf("  2: Detailed Trace Mode (Step-by-step for a single game)\n");
     printf("Enter your choice (1 or 2): ");
-    if (scanf("%d", &run_mode) != 1 || (run_mode != 1 && run_mode != 2)) {
+    if (!flush_output()) {
+        return EXIT_FAILURE;
+    }
+    int run_mode = read_menu_choice();
+    if (run_mode != 1 && run_mode != 2) {
         fprintf(stderr, "\nInvalid input. Please run the program again and enter 1 or 2.\n");
         return 1;
     }
@@ -50,7 +53,11 @@ int main() {
     printf("  1: Strict Mode (Fail immediately if capital is insufficient)\n");
     printf("  2: Reset-to-1 Mode (Reset bet to base value)\n");
     printf("Enter your choice (0, 1, or 2): ");
-    if (scanf("%d", &betting_mode) != 1 || (betting_mode < 0 || betting_mode > 2)) {
+    if (!flush_output()) {
+        return EXIT_FAILURE;
+    }
+    int betting_mode = read_menu_choice();
+    if (betting_mode < 0) {
         fprintf(stderr, "\nInvalid input. Please run the program again and enter 0, 1, or 2.\n");
         return 1;
     }
@@ -59,6 +66,12 @@ int main() {
     double initial_capital = 10000.0; // 初始本金
     double base_bet = 1.0;          // 基础赌注
     double target_capital = initial_capital * 2.0; // 目标金额
+    time_t now = time(NULL);
+    if (now == (time_t)-1) {
+        fputs("Failed to read the clock for the simulation seed.\n", stderr);
+        return EXIT_FAILURE;
+    }
+    unsigned int seed = (unsigned int)now;
 
     // ==================== 根据运行模式执行对应代码 ====================
     if (run_mode == 1) { // 运行模式一：大规模并行基准测试
@@ -67,9 +80,13 @@ int main() {
         long long update_interval = (num_simulations / 100) + 1;
 
         int max_threads = omp_get_max_threads();
-        unsigned int *seeds = (unsigned int*)malloc(max_threads * sizeof(unsigned int));
-        srand((unsigned int)time(NULL));
-        for (int i = 0; i < max_threads; i++) seeds[i] = rand();
+        unsigned int *seeds = calloc((size_t)max_threads, sizeof *seeds);
+        if (seeds == NULL) {
+            fputs("Failed to allocate simulation seeds.\n", stderr);
+            return EXIT_FAILURE;
+        }
+        srand(seed);
+        for (int i = 0; i < max_threads; i++) seeds[i] = (unsigned int)rand();
 
         // 运行信息输出 (英文)
         printf("\nRun Mode 1: Benchmark | Betting Mode: %d\n", betting_mode);
@@ -87,10 +104,12 @@ int main() {
                 } else {
                     loss_count++;
                 }
-                #pragma omp atomic
-                completed_count++;
-                if (thread_id == 0 && (completed_count % update_interval == 0)) {
-                    print_progress((double)completed_count / num_simulations);
+                #pragma omp critical(simulation_progress)
+                {
+                    completed_count++;
+                    if (completed_count % update_interval == 0) {
+                        print_progress((double)completed_count / num_simulations);
+                    }
                 }
             }
         }
@@ -115,23 +134,59 @@ int main() {
         // 运行信息输出 (英文)
         printf("\nRun Mode 2: Detailed Trace | Betting Mode: %d\n", betting_mode);
         printf("------------------------------------\n");
-        simulate_detailed_run(initial_capital, target_capital, base_bet, betting_mode);
+        simulate_detailed_run(initial_capital, target_capital, base_bet, betting_mode, seed);
         printf("------------------------------------\n");
     }
 
-    return 0; // 程序正常结束
+    return flush_output() ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
 // --- 函数定义 ---
 
+static int read_menu_choice(void) {
+    int ch;
+    do {
+        ch = getchar();
+    } while (isspace(ch));
+
+    int negative = ch == '-';
+    if (ch == '+' || negative) {
+        ch = getchar();
+    }
+    if (ch < '0' || ch > '9') {
+        return -1;
+    }
+
+    int choice = 0;
+    do {
+        choice = choice * 10 + (ch - '0');
+        if (choice > 2) {
+            return -1;
+        }
+        ch = getchar();
+    } while (ch >= '0' && ch <= '9');
+
+    if (ch == EOF ? ferror(stdin) : !isspace(ch)) {
+        return -1;
+    }
+    return negative ? -choice : choice;
+}
+
+static int flush_output(void) {
+    if (fflush(stdout) == EOF || ferror(stdout)) {
+        fputs("Failed to write program output.\n", stderr);
+        return 0;
+    }
+    return 1;
+}
+
 /**
  * @brief 模式二专用：带详细打印的单次模拟
  */
-void simulate_detailed_run(double initial_capital, double target_capital, double base_bet, int betting_mode) {
+void simulate_detailed_run(double initial_capital, double target_capital, double base_bet, int betting_mode, unsigned int seed) {
     double current_capital = initial_capital;
     double current_bet = base_bet;
     int round = 1;
-    unsigned int seed = (unsigned int)time(NULL);
 
     // 详细追踪的表头 (英文)
     printf("Initial Capital: %.2f, Target: %.2f, Base Bet: %.2f\n\n", initial_capital, target_capital, base_bet);

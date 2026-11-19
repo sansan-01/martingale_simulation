@@ -1,0 +1,30 @@
+# Local credentials and configuration
+.env
+.env.*
+!.env.example
+
+# CMake builds and compiled binaries
+/build/
+/build-*/
+/cmake-build-*/
+/CMakeCache.txt
+/CMakeFiles/
+/CMakeUserPresets.json
+/cmake_install.cmake
+/compile_commands.json
+/Makefile
+/build.ninja
+/.ninja_deps
+/.ninja_log
+/martingale_simulation
+/martingale_simulator
+*.o
+*.obj
+*.exe
+
+# Editor and OS files
+.idea/
+.vscode/
+.vs/
+.DS_Store
+Thumbs.db
